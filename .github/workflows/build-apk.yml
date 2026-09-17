@@ -1,7 +1,7 @@
 name: Build HunchText APK
 on:
   push:
-    branches: [ main ]
+    branches: [ main, hunch-overlay-v1 ]
   workflow_dispatch:
 jobs:
   build:
@@ -18,5 +18,5 @@ jobs:
       - run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: HunchText-V1-debug-apk
+          name: HunchText-V1-overlay-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
