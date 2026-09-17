@@ -1,0 +1,3 @@
+package com.axali.hunchtext;
+import android.app.*;import android.os.*;import android.content.*;import android.view.*;import android.view.inputmethod.*;import android.widget.*;import java.util.*;
+public class MainActivity extends Activity{public void onCreate(Bundle b){super.onCreate(b); LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);l.setPadding(32,48,32,32); TextView t=new TextView(this);t.setText("HunchText V1\n\nA keyboard for richer expression.\n\nAI suggests the feeling; you choose the feeling.\n\nEnable HunchText in Android Settings → System → Keyboard → On-screen keyboard, then select HunchText when typing.");t.setTextSize(18);l.addView(t);setContentView(l);}}

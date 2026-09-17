@@ -1,0 +1,10 @@
+package com.axali.hunchtext;
+import android.inputmethodservice.InputMethodService;import android.view.*;import android.view.inputmethod.InputConnection;import android.widget.*;import java.util.*;
+public class HunchTextImeService extends InputMethodService{
+ LinearLayout root; EditText preview;
+ public View onCreateInputView(){root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(6,6,6,6); preview=new EditText(this);preview.setHint("Type here, then choose a hunch");root.addView(preview,new LinearLayout.LayoutParams(-1,120));
+  LinearLayout tools=new LinearLayout(this); String[] moods={"✨ Hunch","❤️ Warm","😊 Friendly","💬 Direct","🌿 Gentle","🔥 Confident"}; for(String m:moods){Button b=new Button(this);b.setText(m);b.setOnClickListener(v->transform(((Button)v).getText().toString()));tools.addView(b,new LinearLayout.LayoutParams(0,120,1));}root.addView(tools);
+  LinearLayout keys=new LinearLayout(this); String[] rows={"qwertyuiop","asdfghjkl","zxcvbnm"}; for(String row:rows){LinearLayout r=new LinearLayout(this);for(char c:row.toCharArray()){Button b=new Button(this);b.setText(String.valueOf(c));b.setOnClickListener(v->commit(((Button)v).getText().toString()));r.addView(b,new LinearLayout.LayoutParams(0,110,1));}keys.addView(r);}root.addView(keys); Button space=new Button(this);space.setText("SPACE");space.setOnClickListener(v->commit(" "));root.addView(space);return root; }
+ void commit(String s){InputConnection ic=getCurrentInputConnection();if(ic!=null)ic.commitText(s,1);}
+ void transform(String mode){String s=preview.getText().toString().trim();if(s.isEmpty())return;String out=s;if(mode.contains("Warm"))out=s+" ❤️";else if(mode.contains("Friendly"))out=s+" 😊";else if(mode.contains("Gentle"))out="Just wanted to say: "+s;else if(mode.contains("Confident"))out=s+" — I mean it.";else if(mode.contains("Direct"))out=s;else out=s+"\n\nPossible hunch: caring • concerned • thoughtful\nChoose the feeling that fits you.";InputConnection ic=getCurrentInputConnection();if(ic!=null)ic.commitText(out,1);}
+}
