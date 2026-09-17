@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">HunchText</string>
+    <string name="hunch_accessibility_description">HunchText uses accessibility access to read the text field you are actively editing and offer expression suggestions. HunchText does not need access to passwords or unrelated content.</string>
+</resources>
