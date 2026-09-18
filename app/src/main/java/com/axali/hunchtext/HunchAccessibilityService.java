@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.SurfaceControl;
@@ -195,7 +196,7 @@ public class HunchAccessibilityService extends AccessibilityService {
         releaseWindowAttachedHunch();
 
         try {
-            hunchHost = new SurfaceControlViewHost(this, display, null);
+            hunchHost = new SurfaceControlViewHost(this, display, (IBinder) null);
             Button button = createHunchButton(fromMenu);
             hunchHost.setView(button, 54, 54);
 
@@ -589,7 +590,7 @@ public class HunchAccessibilityService extends AccessibilityService {
             if (display == null) return;
 
             try {
-                hunchHost = new SurfaceControlViewHost(this, display, null);
+                hunchHost = new SurfaceControlViewHost(this, display, (IBinder) null);
                 hunchHost.setView(
                         panel,
                         WindowManager.LayoutParams.MATCH_PARENT,
