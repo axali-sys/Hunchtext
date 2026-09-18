@@ -131,6 +131,7 @@ public class HunchAccessibilityService extends AccessibilityService {
 
     private void enableToolbarHunch() {
         prefs().edit().putBoolean(KEY_TOOLBAR_ENABLED, true).apply();
+        menuMode = false;
         menuVisibleUntil = 0L;
         releaseWindowAttachedHunch();
         removeLegacyOverlay();
