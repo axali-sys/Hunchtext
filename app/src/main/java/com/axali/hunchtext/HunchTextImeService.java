@@ -1,16 +1,25 @@
 package com.axali.hunchtext;
 
 import android.inputmethodservice.InputMethodService;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.*;
 import android.view.inputmethod.InputConnection;
 import android.widget.*;
+import org.json.*;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 
 public class HunchTextImeService extends InputMethodService {
     LinearLayout root;
     EditText preview;
     TextView prediction;
-    int mode = 0;
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Handler main = new Handler(Looper.getMainLooper());
+    static final String AI_URL = "https://hunchtext-ai.vercel.app/api/hunch";
 
     public View onCreateInputView() {
         root = new LinearLayout(this);
@@ -18,12 +27,12 @@ public class HunchTextImeService extends InputMethodService {
         root.setPadding(6,6,6,6);
 
         preview = new EditText(this);
-        preview.setHint("Type here — Hunch will predict and enrich");
+        preview.setHint("Type here — Hunch AI will predict and enrich");
         preview.setSingleLine(false);
         root.addView(preview, new LinearLayout.LayoutParams(-1,140));
 
         prediction = new TextView(this);
-        prediction.setText("Next: the • we • can • should");
+        prediction.setText("Next: AI prediction loading when you type");
         prediction.setPadding(10,8,10,8);
         root.addView(prediction, new LinearLayout.LayoutParams(-1,70));
 
@@ -47,7 +56,7 @@ public class HunchTextImeService extends InputMethodService {
                 b.setOnClickListener(v -> {
                     String s=((Button)v).getText().toString();
                     commit(s);
-                    updatePrediction(preview.getText().toString()+s);
+                    requestPrediction(preview.getText().toString());
                 });
                 r.addView(b,new LinearLayout.LayoutParams(0,110,1));
             }
@@ -57,7 +66,7 @@ public class HunchTextImeService extends InputMethodService {
 
         Button space = new Button(this);
         space.setText("SPACE");
-        space.setOnClickListener(v -> { commit(" "); updatePrediction(preview.getText().toString()+" "); });
+        space.setOnClickListener(v -> { commit(" "); requestPrediction(preview.getText().toString()); });
         root.addView(space);
         return root;
     }
@@ -68,59 +77,99 @@ public class HunchTextImeService extends InputMethodService {
         if(preview!=null) preview.append(s);
     }
 
-    void updatePrediction(String text) {
-        String t=text.toLowerCase(Locale.US).trim();
-        String p="Next: the • we • can • should";
-        if(t.endsWith("i think we should")) p="Next: talk • try • go • wait • consider";
-        else if(t.endsWith("i want to")) p="Next: make • share • build • create • learn";
-        else if(t.endsWith("thank you")) p="Next: for • so • very • again";
-        else if(t.endsWith("i feel")) p="Next: happy • worried • ready • calm • hopeful";
-        else if(t.length()>40) p="Next: and • because • however • therefore • finally";
-        prediction.setText(p);
+    void requestPrediction(String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        prediction.setText("Next: Hunch AI is thinking…");
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("text", text);
+                body.put("context", text);
+                body.put("mode", "predict");
+                body.put("style", "natural");
+                body.put("maxSuggestions", 5);
+                String response = postJson(body.toString());
+                JSONObject json = new JSONObject(response);
+                JSONArray a = json.optJSONArray("suggestions");
+                StringBuilder out = new StringBuilder("Next: ");
+                if (a != null && a.length() > 0) {
+                    for (int i=0;i<a.length();i++) {
+                        if (i>0) out.append(" • ");
+                        out.append(a.optString(i));
+                    }
+                } else out.append("no suggestion");
+                main.post(() -> prediction.setText(out.toString()));
+            } catch (Exception e) {
+                main.post(() -> prediction.setText("Next: AI unavailable — local mode"));
+            }
+        });
     }
 
     void transform(String modeText) {
         String s=preview.getText().toString().trim();
         if(s.isEmpty()) return;
-        String out=s;
-        if(modeText.contains("Long Text")) {
-            out=longText(s);
-        } else if(modeText.contains("Warm")) {
-            out="I truly appreciate this: "+s+" ❤️";
-        } else if(modeText.contains("Friendly")) {
-            out="Hey! "+s+" 😊";
-        } else if(modeText.contains("Gentle")) {
-            out="Just wanted to share this gently: "+s;
-        } else if(modeText.contains("Confident")) {
-            out=s+" — I mean it.";
-        } else if(modeText.contains("Direct")) {
-            out=s;
-        } else {
-            out=s+"\n\nPossible hunches: caring • concerned • thoughtful\nChoose the expression that fits you.";
-        }
-        InputConnection ic=getCurrentInputConnection();
-        if(ic!=null) ic.commitText(out,1);
+        String mode = modeText.contains("Long Text") ? "long-text" : "hunch";
+        String style = modeText.contains("Warm") ? "warm" :
+                modeText.contains("Friendly") ? "friendly" :
+                modeText.contains("Direct") ? "direct" :
+                modeText.contains("Gentle") ? "gentle" :
+                modeText.contains("Confident") ? "confident" :
+                "natural";
+        prediction.setText("Hunch AI is creating options…");
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("text", s);
+                body.put("context", s);
+                body.put("mode", mode);
+                body.put("style", style);
+                body.put("maxSuggestions", 5);
+                JSONObject json = new JSONObject(postJson(body.toString()));
+                main.post(() -> {
+                    try {
+                        InputConnection ic=getCurrentInputConnection();
+                        if (ic == null) return;
+                        if ("long-text".equals(mode)) {
+                            String out=json.optString("text", s);
+                            ic.commitText(out,1);
+                        } else {
+                            JSONArray a=json.optJSONArray("suggestions");
+                            StringBuilder out=new StringBuilder();
+                            if(a!=null) for(int i=0;i<a.length();i++) {
+                                if(i>0) out.append("\n\n");
+                                out.append(a.optString(i));
+                            }
+                            if(out.length()>0) ic.commitText(out.toString(),1);
+                        }
+                    } catch(Exception ignored) {}
+                });
+            } catch (Exception e) {
+                main.post(() -> prediction.setText("Hunch AI unavailable"));
+            }
+        });
     }
 
-    String longText(String s) {
-        String clean=s.replaceAll("\\s+"," ").trim();
-        if(clean.length()<80)
-            return "Refined expression:\n"+clean+"\n\nA little more warmth and clarity can make the message feel natural, thoughtful, and complete.";
-        String[] parts=clean.split("(?<=[.!?])\\s+");
-        StringBuilder b=new StringBuilder();
-        for(int i=0;i<parts.length;i++){
-            String part=parts[i].trim();
-            if(part.isEmpty()) continue;
-            if(i==0) b.append(part);
-            else if(i==parts.length-1) b.append("\n\nFinally, ").append(lowerFirst(part));
-            else b.append(" ").append(part);
+    String postJson(String body) throws Exception {
+        HttpURLConnection c=(HttpURLConnection)new URL(AI_URL).openConnection();
+        c.setRequestMethod("POST");
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(15000);
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type","application/json");
+        try(OutputStream os=c.getOutputStream()) {
+            os.write(body.getBytes(StandardCharsets.UTF_8));
         }
-        b.append("\n\nThe meaning stays yours; HunchText simply refines the flow, clarity, and expression.");
-        return b.toString();
+        InputStream in=c.getResponseCode()<400 ? c.getInputStream() : c.getErrorStream();
+        ByteArrayOutputStream out=new ByteArrayOutputStream();
+        byte[] buf=new byte[4096]; int n;
+        while((n=in.read(buf))!=-1) out.write(buf,0,n);
+        String result=new String(out.toByteArray(),StandardCharsets.UTF_8);
+        if(c.getResponseCode()>=400) throw new IOException(result);
+        return result;
     }
 
-    String lowerFirst(String s) {
-        if(s.length()<2) return s;
-        return Character.toLowerCase(s.charAt(0))+s.substring(1);
+    @Override public void onDestroy() {
+        executor.shutdownNow();
+        super.onDestroy();
     }
 }
