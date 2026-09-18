@@ -6,28 +6,38 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.view.Display;
 import android.view.Gravity;
+import android.view.SurfaceControl;
+import android.view.SurfaceControlViewHost;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.hardware.display.DisplayManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
 public class HunchAccessibilityService extends AccessibilityService {
     private WindowManager wm;
-    private View overlay;
+    private View legacyOverlay;
     private AccessibilityNodeInfo focusedNode;
-    private WindowManager.LayoutParams overlayParams;
+    private WindowManager.LayoutParams legacyParams;
+
+    private SurfaceControlViewHost hunchHost;
+    private SurfaceControl hunchSurface;
+    private AccessibilityWindowInfo keyboardWindow;
     private final Handler handler = new Handler();
 
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
+
         AccessibilityServiceInfo info = getServiceInfo();
         if (info != null) {
             info.eventTypes =
@@ -39,6 +49,7 @@ public class HunchAccessibilityService extends AccessibilityService {
             info.flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             setServiceInfo(info);
         }
+
         showHunchButton();
         scheduleReposition();
     }
@@ -60,87 +71,142 @@ public class HunchAccessibilityService extends AccessibilityService {
 
     private void scheduleReposition() {
         handler.removeCallbacksAndMessages(null);
-        handler.postDelayed(this::positionNearSamsungToolbar, 120);
-        handler.postDelayed(this::positionNearSamsungToolbar, 500);
+        handler.postDelayed(this::positionHunch, 100);
+        handler.postDelayed(this::positionHunch, 350);
+        handler.postDelayed(this::positionHunch, 800);
     }
 
     private void showHunchButton() {
-        if (overlay != null) return;
+        if (Build.VERSION.SDK_INT >= 34) {
+            showWindowAttachedHunch();
+        } else {
+            showLegacyHunch();
+        }
+    }
 
-        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-
+    private Button createHunchButton() {
         Button b = new Button(this);
         b.setText("✦");
         b.setTextSize(20);
         b.setTextColor(Color.WHITE);
         b.setContentDescription("HunchText");
         b.setPadding(0, 0, 0, 0);
+        b.setGravity(Gravity.CENTER);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.rgb(103, 80, 164));
-        bg.setCornerRadius(28);
+        bg.setCornerRadius(26);
         b.setBackground(bg);
 
         b.setOnClickListener(v -> showHunchChoices());
-
-        overlay = b;
-        overlayParams = new WindowManager.LayoutParams(
-                50,
-                50,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT
-        );
-        overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
-        overlayParams.x = 0;
-        overlayParams.y = 900;
-
-        wm.addView(overlay, overlayParams);
+        return b;
     }
 
-    private void positionNearSamsungToolbar() {
-        if (overlay == null || wm == null || overlayParams == null) return;
+    private void showWindowAttachedHunch() {
+        if (hunchHost != null) return;
 
-        AccessibilityWindowInfo inputMethod = null;
-        for (AccessibilityWindowInfo w : getWindows()) {
-            if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                inputMethod = w;
-                break;
+        AccessibilityWindowInfo window = findKeyboardWindow();
+        if (window == null) return;
+
+        DisplayManager dm = getSystemService(DisplayManager.class);
+        Display display = dm.getDisplay(window.getDisplayId());
+        if (display == null) return;
+
+        try {
+            hunchHost = new SurfaceControlViewHost(this, display, null);
+            Button button = createHunchButton();
+            hunchHost.setView(button, 54, 54);
+
+            SurfaceControlViewHost.SurfacePackage pkg = hunchHost.getSurfacePackage();
+            if (pkg == null || pkg.getSurfaceControl() == null) {
+                releaseWindowAttachedHunch();
+                return;
             }
-        }
 
-        if (inputMethod == null) {
-            overlayParams.x = 0;
-            overlayParams.y = 900;
-            safeUpdate();
-            return;
+            hunchSurface = pkg.getSurfaceControl();
+            attachAccessibilityOverlayToWindow(window.getId(), hunchSurface);
+            keyboardWindow = window;
+            positionWindowAttachedHunch(window);
+        } catch (Throwable t) {
+            releaseWindowAttachedHunch();
+            showLegacyHunch();
         }
+    }
+
+    private void positionHunch() {
+        AccessibilityWindowInfo window = findKeyboardWindow();
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            if (window == null) {
+                releaseWindowAttachedHunch();
+                return;
+            }
+
+            if (hunchHost == null || hunchSurface == null || keyboardWindow == null
+                    || keyboardWindow.getId() != window.getId()) {
+                releaseWindowAttachedHunch();
+                showWindowAttachedHunch();
+                return;
+            }
+
+            positionWindowAttachedHunch(window);
+        } else {
+            positionLegacyHunch(window);
+        }
+    }
+
+    private void positionWindowAttachedHunch(AccessibilityWindowInfo window) {
+        if (hunchSurface == null) return;
 
         Rect keyboard = new Rect();
-        inputMethod.getBoundsInScreen(keyboard);
+        window.getBoundsInScreen(keyboard);
 
-        Rect more = findMoreButton(inputMethod.getRoot());
+        Rect anchor = findMoreButtonInWindow(window);
 
-        if (more != null && more.width() > 0 && more.height() > 0) {
-            // Put Hunch immediately to the left of Samsung Keyboard's right-side
-            // More/options control, aligned to the same vertical center.
-            int size = 50;
-            overlayParams.x = Math.max(0, more.left - size - 4);
-            overlayParams.y = Math.max(0, more.centerY() - size / 2);
+        int x;
+        int y;
+
+        if (anchor != null) {
+            // Window-attached overlays use window coordinates.
+            Rect anchorWindow = new Rect();
+            AccessibilityNodeInfo anchorNode = findMoreNode(window.getRoot());
+            if (anchorNode != null) {
+                anchorNode.getBoundsInWindow(anchorWindow);
+            }
+
+            if (anchorWindow.width() > 0 && anchorWindow.height() > 0) {
+                x = Math.max(4, anchorWindow.left - 58);
+                y = Math.max(2, anchorWindow.centerY() - 27);
+            } else {
+                x = Math.max(4, anchor.left - keyboard.left - 58);
+                y = Math.max(2, anchor.centerY() - keyboard.top - 27);
+            }
         } else {
-            // Fallback: place it at the upper-left of the keyboard/suggestion area.
-            overlayParams.x = Math.max(8, keyboard.left + 8);
-            overlayParams.y = Math.max(0, keyboard.top + 4);
+            // Samsung may not expose the ⋮ button through accessibility.
+            // Keep Hunch in the suggestion-toolbar area near the right edge.
+            x = Math.max(4, keyboard.width() - 116);
+            y = 4;
         }
 
-        overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
-        safeUpdate();
+        new SurfaceControl.Transaction()
+                .setPosition(hunchSurface, x, y)
+                .setLayer(hunchSurface, 1000)
+                .apply();
     }
 
-    private Rect findMoreButton(AccessibilityNodeInfo root) {
+    private Rect findMoreButtonInWindow(AccessibilityWindowInfo window) {
+        AccessibilityNodeInfo node = findMoreNode(window.getRoot());
+        if (node == null) return null;
+
+        Rect r = new Rect();
+        node.getBoundsInScreen(r);
+        return r;
+    }
+
+    private AccessibilityNodeInfo findMoreNode(AccessibilityNodeInfo root) {
         if (root == null) return null;
 
-        Rect best = null;
+        AccessibilityNodeInfo best = null;
         int bestRight = -1;
 
         java.util.ArrayDeque<AccessibilityNodeInfo> queue = new java.util.ArrayDeque<>();
@@ -154,16 +220,19 @@ public class HunchAccessibilityService extends AccessibilityService {
             String label = ((text == null ? "" : text.toString()) + " "
                     + (desc == null ? "" : desc.toString())).toLowerCase();
 
-            if (label.contains("more")
+            boolean namedMore = label.contains("more")
                     || label.contains("more options")
                     || label.contains("additional")
-                    || label.contains("options")) {
-                Rect r = new Rect();
-                node.getBoundsInScreen(r);
-                if (r.width() > 0 && r.height() > 0 && r.right > bestRight) {
-                    best = r;
-                    bestRight = r.right;
-                }
+                    || label.contains("options");
+
+            Rect r = new Rect();
+            node.getBoundsInScreen(r);
+
+            if (namedMore && node.isVisibleToUser()
+                    && r.width() > 0 && r.height() > 0
+                    && r.right > bestRight) {
+                best = node;
+                bestRight = r.right;
             }
 
             for (int i = 0; i < node.getChildCount(); i++) {
@@ -175,11 +244,85 @@ public class HunchAccessibilityService extends AccessibilityService {
         return best;
     }
 
-    private void safeUpdate() {
+    private AccessibilityWindowInfo findKeyboardWindow() {
         try {
-            wm.updateViewLayout(overlay, overlayParams);
+            for (AccessibilityWindowInfo w : getWindows()) {
+                if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    return w;
+                }
+            }
         } catch (Exception ignored) {
         }
+        return null;
+    }
+
+    private void showLegacyHunch() {
+        if (legacyOverlay != null || wm == null && getSystemService(WINDOW_SERVICE) == null) return;
+
+        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        Button b = createHunchButton();
+
+        legacyOverlay = b;
+        legacyParams = new WindowManager.LayoutParams(
+                54,
+                54,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+        );
+        legacyParams.gravity = Gravity.TOP | Gravity.LEFT;
+        legacyParams.x = 8;
+        legacyParams.y = 900;
+
+        try {
+            wm.addView(legacyOverlay, legacyParams);
+        } catch (Exception ignored) {
+            legacyOverlay = null;
+        }
+    }
+
+    private void positionLegacyHunch(AccessibilityWindowInfo window) {
+        if (legacyOverlay == null || wm == null || legacyParams == null || window == null) return;
+
+        Rect keyboard = new Rect();
+        window.getBoundsInScreen(keyboard);
+
+        Rect anchor = findMoreButtonInWindow(window);
+
+        if (anchor != null) {
+            legacyParams.x = Math.max(4, anchor.left - 58);
+            legacyParams.y = Math.max(0, anchor.centerY() - 27);
+        } else {
+            legacyParams.x = Math.max(8, keyboard.right - 116);
+            legacyParams.y = Math.max(0, keyboard.top + 4);
+        }
+
+        try {
+            wm.updateViewLayout(legacyOverlay, legacyParams);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseWindowAttachedHunch() {
+        if (hunchSurface != null) {
+            try {
+                new SurfaceControl.Transaction()
+                        .reparent(hunchSurface, null)
+                        .apply();
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (hunchHost != null) {
+            try {
+                hunchHost.release();
+            } catch (Exception ignored) {
+            }
+        }
+
+        hunchSurface = null;
+        hunchHost = null;
+        keyboardWindow = null;
     }
 
     private void showHunchChoices() {
@@ -219,38 +362,71 @@ public class HunchAccessibilityService extends AccessibilityService {
             b.setOnClickListener(
                     v -> applyHunch(text, ((Button) v).getText().toString())
             );
-            panel.addView(
-                    b,
-                    new LinearLayout.LayoutParams(0, 62, 1)
+            panel.addView(b, new LinearLayout.LayoutParams(0, 62, 1));
+        }
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            releaseWindowAttachedHunch();
+
+            AccessibilityWindowInfo window = findKeyboardWindow();
+            if (window == null) return;
+
+            DisplayManager dm = getSystemService(DisplayManager.class);
+            Display display = dm.getDisplay(window.getDisplayId());
+            if (display == null) return;
+
+            try {
+                hunchHost = new SurfaceControlViewHost(this, display, null);
+                hunchHost.setView(
+                        panel,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        70
+                );
+
+                SurfaceControlViewHost.SurfacePackage pkg =
+                        hunchHost.getSurfacePackage();
+
+                if (pkg == null || pkg.getSurfaceControl() == null) return;
+
+                hunchSurface = pkg.getSurfaceControl();
+                keyboardWindow = window;
+                attachAccessibilityOverlayToWindow(window.getId(), hunchSurface);
+
+                new SurfaceControl.Transaction()
+                        .setPosition(hunchSurface, 0, 4)
+                        .setLayer(hunchSurface, 1000)
+                        .apply();
+            } catch (Throwable t) {
+                releaseWindowAttachedHunch();
+            }
+        } else {
+            if (legacyOverlay != null && wm != null) {
+                wm.removeView(legacyOverlay);
+                legacyOverlay = null;
+            }
+
+            wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            legacyOverlay = panel;
+            legacyParams = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    70,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    PixelFormat.TRANSLUCENT
             );
+            legacyParams.gravity = Gravity.TOP | Gravity.LEFT;
+            legacyParams.y = findKeyboardTop();
+
+            wm.addView(panel, legacyParams);
         }
-
-        if (overlay != null) {
-            wm.removeView(overlay);
-        }
-
-        overlay = panel;
-        overlayParams = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                70,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT
-        );
-        overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
-        overlayParams.x = 0;
-        overlayParams.y = findKeyboardTop();
-
-        wm.addView(panel, overlayParams);
     }
 
     private int findKeyboardTop() {
-        for (AccessibilityWindowInfo w : getWindows()) {
-            if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                Rect r = new Rect();
-                w.getBoundsInScreen(r);
-                return Math.max(0, r.top + 4);
-            }
+        AccessibilityWindowInfo w = findKeyboardWindow();
+        if (w != null) {
+            Rect r = new Rect();
+            w.getBoundsInScreen(r);
+            return Math.max(0, r.top + 4);
         }
         return 900;
     }
@@ -281,13 +457,19 @@ public class HunchAccessibilityService extends AccessibilityService {
             Toast.makeText(this, out, Toast.LENGTH_LONG).show();
         }
 
-        if (overlay != null) {
-            wm.removeView(overlay);
-            overlay = null;
-            overlayParams = null;
-            showHunchButton();
-            scheduleReposition();
+        releaseWindowAttachedHunch();
+
+        if (legacyOverlay != null && wm != null) {
+            try {
+                wm.removeView(legacyOverlay);
+            } catch (Exception ignored) {
+            }
+            legacyOverlay = null;
+            legacyParams = null;
         }
+
+        showHunchButton();
+        scheduleReposition();
     }
 
     @Override
@@ -297,10 +479,16 @@ public class HunchAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
-        if (overlay != null && wm != null) {
-            wm.removeView(overlay);
+        releaseWindowAttachedHunch();
+
+        if (legacyOverlay != null && wm != null) {
+            try {
+                wm.removeView(legacyOverlay);
+            } catch (Exception ignored) {
+            }
         }
-        overlay = null;
+
+        legacyOverlay = null;
         super.onDestroy();
     }
 }
