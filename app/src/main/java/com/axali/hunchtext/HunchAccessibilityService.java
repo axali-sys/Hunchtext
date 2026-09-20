@@ -68,6 +68,7 @@ public class HunchAccessibilityService extends AccessibilityService {
             setServiceInfo(info);
         }
 
+        prefs().edit().putBoolean(KEY_TOOLBAR_ENABLED, true).apply();
         scheduleReposition();
     }
 
@@ -148,22 +149,14 @@ public class HunchAccessibilityService extends AccessibilityService {
     private void showHunchButton() {
         if (!toolbarEnabled() || menuMode) return;
 
-        if (Build.VERSION.SDK_INT >= 34) {
-            showWindowAttachedHunch(false);
-        } else {
-            showLegacyHunch(false);
-        }
+        showLegacyHunch(false);
     }
 
     private void showMenuHunch() {
         if (toolbarEnabled() || System.currentTimeMillis() >= menuVisibleUntil) return;
 
         menuMode = true;
-        if (Build.VERSION.SDK_INT >= 34) {
-            showWindowAttachedHunch(true);
-        } else {
-            showLegacyHunch(true);
-        }
+        showLegacyHunch(true);
     }
 
     private AccessibilityWindowInfo chooseTargetWindow(boolean fromMenu) {
@@ -244,16 +237,7 @@ public class HunchAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= 34) {
-            if (hunchHost == null || hunchSurface == null || targetWindow == null
-                    || targetWindow.getId() != desired.getId()) {
-                showWindowAttachedHunch(wantMenu);
-                return;
-            }
-            positionWindowAttachedHunch(desired);
-        } else {
-            positionLegacyHunch(desired);
-        }
+        positionLegacyHunch(desired);
     }
 
     private void positionWindowAttachedHunch(AccessibilityWindowInfo window) {
