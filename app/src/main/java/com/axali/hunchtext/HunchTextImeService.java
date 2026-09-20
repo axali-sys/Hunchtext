@@ -36,6 +36,29 @@ public class HunchTextImeService extends InputMethodService {
         prediction.setPadding(10,8,10,8);
         root.addView(prediction, new LinearLayout.LayoutParams(-1,70));
 
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        Button hunchText = new Button(this);
+        hunchText.setText("✦ HunchText");
+        hunchText.setOnClickListener(v -> transform("✨ Hunch"));
+        toolbar.addView(hunchText, new LinearLayout.LayoutParams(0,110,1));
+        Button more = new Button(this);
+        more.setText("⋮");
+        more.setOnClickListener(v -> {
+            PopupMenu menu = new PopupMenu(this, more);
+            menu.getMenu().add("✨ Hunch");
+            menu.getMenu().add("❤️ Warm");
+            menu.getMenu().add("😊 Friendly");
+            menu.getMenu().add("💬 Direct");
+            menu.getMenu().add("🌿 Gentle");
+            menu.getMenu().add("🔥 Confident");
+            menu.getMenu().add("✦ Long Text");
+            menu.setOnMenuItemClickListener(item -> { transform(item.getTitle().toString()); return true; });
+            menu.show();
+        });
+        toolbar.addView(more, new LinearLayout.LayoutParams(120,110));
+        root.addView(toolbar);
+
         LinearLayout tools = new LinearLayout(this);
         String[] moods = {"✨ Hunch","❤️ Warm","😊 Friendly","💬 Direct","🌿 Gentle","🔥 Confident","✦ Long Text"};
         for (String m : moods) {
@@ -44,6 +67,7 @@ public class HunchTextImeService extends InputMethodService {
             b.setOnClickListener(v -> transform(((Button)v).getText().toString()));
             tools.addView(b,new LinearLayout.LayoutParams(0,120,1));
         }
+        tools.setVisibility(View.GONE);
         root.addView(tools);
 
         LinearLayout keys = new LinearLayout(this);
